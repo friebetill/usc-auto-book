@@ -25,12 +25,22 @@ def main():
     logger.info("USC Auto-Book Tool Started")
     logger.info("="*60)
 
-    # Calculate target date
+    # Calculate target date - find Monday within the 14-day booking window
     advance_days = config.get('advanceDays', 14)
-    target_date = datetime.today() + timedelta(days=advance_days)
+    today = datetime.today()
+
+    # Find the date that's 14 days ahead
+    fourteen_days_ahead = today + timedelta(days=advance_days)
+
+    # Find the Monday on or before that date (to stay within booking window)
+    days_since_monday = fourteen_days_ahead.weekday()  # Monday = 0, Sunday = 6
+    target_date = fourteen_days_ahead - timedelta(days=days_since_monday)
     target_date_str = target_date.strftime('%Y-%m-%d')
 
-    logger.info(f"Target booking date: {target_date_str} ({advance_days} days in advance)")
+    # Calculate how many days ahead the target Monday is
+    days_ahead = (target_date - today).days
+
+    logger.info(f"Target booking date: {target_date_str} (Monday, {days_ahead} days ahead)")
     logger.info(f"Location ID: {config['locationId']}")
     logger.info(f"Poll interval: {config['pollInterval']}s")
 
