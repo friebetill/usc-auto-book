@@ -1,4 +1,4 @@
-import requests
+import cloudscraper
 import os
 import sys
 import time
@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from functools import wraps
 from typing import Optional, Dict, Any
 from dotenv import load_dotenv
+import requests  # Keep for exception types
 
 
 # ============================================================
@@ -37,6 +38,22 @@ def setup_logging(log_level: str = 'INFO', log_file: Optional[str] = None):
 
 
 logger = logging.getLogger('usc_auto_book')
+
+# Global cloudscraper session for Cloudflare bypass
+_scraper = None
+
+def get_scraper():
+    """Get or create a cloudscraper session."""
+    global _scraper
+    if _scraper is None:
+        _scraper = cloudscraper.create_scraper(
+            browser={
+                'browser': 'chrome',
+                'platform': 'android',
+                'mobile': True
+            }
+        )
+    return _scraper
 
 
 # ============================================================
@@ -223,7 +240,8 @@ def login(config: Dict[str, Any]) -> Optional[str]:
     logger.debug(f"POST: {request_url}")
 
     try:
-        response = requests.post(request_url, data=data, timeout=30)
+        scraper = get_scraper()
+        response = scraper.post(request_url, data=data, headers=config['headers'], timeout=30)
 
         if response.status_code == 200:
             token = response.json()['data']['access_token']
@@ -350,7 +368,8 @@ def findClass(config: Dict[str, Any], date: Optional[datetime] = None) -> Option
     logger.debug(f"GET: {request_url}")
 
     try:
-        response = requests.get(request_url, headers=config['headers'], timeout=30)
+        scraper = get_scraper()
+        response = scraper.get(request_url, headers=config['headers'], timeout=30)
 
         if response.status_code != 200:
             logger.error(f"Failed to fetch classes (status {response.status_code})")
@@ -427,7 +446,8 @@ def bookEvent(class_id: int, bearer: str, config: Dict[str, Any]) -> bool:
     logger.debug(f"POST: {request_url}")
 
     try:
-        response = requests.post(request_url, data=data, headers=headers, timeout=30)
+        scraper = get_scraper()
+        response = scraper.post(request_url, data=data, headers=headers, timeout=30)
 
         if response.status_code == 200:
             booking_id = response.json()['data']['id']
