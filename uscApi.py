@@ -193,6 +193,7 @@ def loadConfig():
         'locationId': int(os.getenv('USC_LOCATION_ID')),
         'advanceDays': int(os.getenv('USC_ADVANCE_DAYS', '14')),
         'pollInterval': int(os.getenv('USC_POLL_INTERVAL', '1800')),
+        'maxPollHours': int(os.getenv('USC_MAX_POLL_HOURS', '5')),
         # Filters (Phase 4)
         'classTitleFilter': os.getenv('USC_CLASS_TITLE_FILTER', '').strip(),
         'instructorFilter': os.getenv('USC_INSTRUCTOR_FILTER', '').strip(),
@@ -200,10 +201,46 @@ def loadConfig():
         'timeRangeEnd': os.getenv('USC_TIME_RANGE_END', '').strip(),
     }
 
+    # Build bookings list — Booking 1 from primary env vars
+    booking1 = {
+        'locationId': config['locationId'],
+        'targetDay': int(os.getenv('USC_TARGET_DAY', '0')),
+        'classTitleFilter': config['classTitleFilter'],
+        'instructorFilter': config['instructorFilter'],
+        'timeRangeStart': config['timeRangeStart'],
+        'timeRangeEnd': config['timeRangeEnd'],
+    }
+    bookings = [booking1]
+
+    # Parse additional bookings from USC_BOOKING_N_* env vars (N=2,3,...)
+    n = 2
+    while True:
+        prefix = f'USC_BOOKING_{n}_'
+        loc_id = os.getenv(f'{prefix}LOCATION_ID')
+        if loc_id is None:
+            break
+        bookings.append({
+            'locationId': int(loc_id),
+            'targetDay': int(os.getenv(f'{prefix}TARGET_DAY', '0')),
+            'classTitleFilter': os.getenv(f'{prefix}CLASS_TITLE_FILTER', '').strip(),
+            'instructorFilter': os.getenv(f'{prefix}INSTRUCTOR_FILTER', '').strip(),
+            'timeRangeStart': os.getenv(f'{prefix}TIME_RANGE_START', '').strip(),
+            'timeRangeEnd': os.getenv(f'{prefix}TIME_RANGE_END', '').strip(),
+        })
+        n += 1
+
+    config['bookings'] = bookings
+
     logger.info("Configuration loaded successfully")
     logger.debug(f"API Base URL: {config['baseURL']}")
-    logger.debug(f"Location ID: {config['locationId']}")
-    logger.debug(f"Advance booking days: {config['advanceDays']}")
+    logger.info(f"Configured {len(bookings)} booking job(s)")
+    for i, b in enumerate(bookings, 1):
+        day_names = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+        logger.debug(
+            f"  Booking {i}: location={b['locationId']}, "
+            f"day={day_names[b['targetDay']]}, "
+            f"filter='{b['classTitleFilter']}'"
+        )
 
     return config
 
