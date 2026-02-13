@@ -50,18 +50,22 @@ def calculate_target_date(target_day, advance_days):
     return target_date
 
 
-def process_booking(booking_index, booking, config):
+def process_booking(user_name, booking_index, booking, token, config):
     """
-    Search and book a single booking job.
+    Search and book a single booking job using a pre-authenticated token.
 
     Args:
+        user_name: User display name for logging
         booking_index: 1-based index for logging
         booking: Booking dict with locationId, targetDay, filters
-        config: Shared config (credentials, API settings)
+        token: Bearer token from login
+        config: Shared config (API settings)
 
     Returns:
         True if booking succeeded, False otherwise
     """
+    log_prefix = f"[{user_name}, Booking {booking_index}]"
+
     # Merge booking-specific fields into a config overlay for findClass
     booking_config = dict(config)
     booking_config.update(booking)
@@ -73,9 +77,9 @@ def process_booking(booking_index, booking, config):
     target_date_str = target_date.strftime('%Y-%m-%d')
     day_name = DAY_NAMES[booking['targetDay']]
 
-    logger.info(f"--- Booking {booking_index} ---")
-    logger.info(f"Target: {target_date_str} ({day_name})")
-    logger.info(f"Location ID: {booking['locationId']}")
+    logger.info(f"{log_prefix} --- Booking {booking_index} ---")
+    logger.info(f"{log_prefix} Target: {target_date_str} ({day_name})")
+    logger.info(f"{log_prefix} Location ID: {booking['locationId']}")
 
     # Log active filters
     filters = []
@@ -89,7 +93,7 @@ def process_booking(booking_index, booking, config):
         filters.append(f"before={booking['timeRangeEnd']}")
 
     if filters:
-        logger.info(f"Filters: {', '.join(filters)}")
+        logger.info(f"{log_prefix} Filters: {', '.join(filters)}")
 
     # Polling loop with max duration
     class_id = None
@@ -98,12 +102,12 @@ def process_booking(booking_index, booking, config):
     deadline = datetime.now() + timedelta(hours=max_poll_hours)
     attempt = 0
 
-    logger.info(f"Polling for up to {max_poll_hours}h (until {deadline.strftime('%H:%M:%S')})")
+    logger.info(f"{log_prefix} Polling for up to {max_poll_hours}h (until {deadline.strftime('%H:%M:%S')})")
 
     while datetime.now() < deadline:
         attempt += 1
         logger.info(
-            f"[Booking {booking_index}, Attempt {attempt}] "
+            f"{log_prefix} [Attempt {attempt}] "
             f"Searching at {datetime.now().strftime('%H:%M:%S')}"
         )
 
@@ -111,46 +115,98 @@ def process_booking(booking_index, booking, config):
             class_id = usc.findClass(booking_config, date=target_date)
 
             if class_id is not None:
-                logger.info(f"Found class! Class ID: {class_id}")
+                logger.info(f"{log_prefix} Found class! Class ID: {class_id}")
                 break
 
-            logger.info(f"No matching classes. Waiting {poll_interval}s...")
+            logger.info(f"{log_prefix} No matching classes. Waiting {poll_interval}s...")
             time.sleep(poll_interval)
 
         except KeyboardInterrupt:
             raise
         except Exception as e:
-            logger.error(f"Error during class search: {e}", exc_info=True)
-            logger.info(f"Retrying in {poll_interval}s...")
+            logger.error(f"{log_prefix} Error during class search: {e}", exc_info=True)
+            logger.info(f"{log_prefix} Retrying in {poll_interval}s...")
             time.sleep(poll_interval)
 
     if class_id is None:
-        logger.warning(f"Booking {booking_index}: No class found within {max_poll_hours}h.")
+        logger.warning(f"{log_prefix} No class found within {max_poll_hours}h.")
         return False
 
-    # Login and book
+    # Book with pre-authenticated token
     try:
-        token = usc.login(config)
-        if token is None:
-            logger.error(f"Booking {booking_index}: Login failed.")
-            return False
-
         success = usc.bookEvent(class_id, token, config)
         if success:
-            logger.info(f"Booking {booking_index}: BOOKED class {class_id}")
+            logger.info(f"{log_prefix} BOOKED class {class_id}")
             return True
         else:
-            logger.error(f"Booking {booking_index}: Booking failed for class {class_id}")
+            logger.error(f"{log_prefix} Booking failed for class {class_id}")
             return False
 
     except Exception as e:
-        logger.error(f"Booking {booking_index}: Unexpected error: {e}")
+        logger.error(f"{log_prefix} Unexpected error: {e}")
         logger.debug("Full traceback:", exc_info=True)
         return False
 
 
+def process_user(user_index, user, config):
+    """
+    Process all due bookings for a single user.
+
+    Args:
+        user_index: 1-based user index
+        user: User dict with name, email, password, bookings
+        config: Shared config (API settings)
+
+    Returns:
+        list of (booking_index, success) tuples, or empty list if nothing due / login failed
+    """
+    user_name = user['name']
+    today_weekday = datetime.today().weekday()
+
+    logger.info(f"[{user_name}] Processing bookings...")
+
+    # Filter to bookings that open today
+    due = [
+        (i, b) for i, b in enumerate(user['bookings'], 1)
+        if booking_open_day(b['targetDay']) == today_weekday
+    ]
+
+    if not due:
+        logger.info(f"[{user_name}] No bookings due today.")
+        for i, b in enumerate(user['bookings'], 1):
+            open_day = DAY_NAMES[booking_open_day(b['targetDay'])]
+            logger.info(f"  [{user_name}] Booking {i} ({DAY_NAMES[b['targetDay']]} class) opens on {open_day}")
+        return []
+
+    logger.info(f"[{user_name}] {len(due)} booking(s) due today:")
+    for idx, b in due:
+        logger.info(f"  [{user_name}] Booking {idx}: {DAY_NAMES[b['targetDay']]} class at location {b['locationId']}")
+
+    # Login once for this user
+    try:
+        token = usc.login(config, email=user['email'], password=user['password'])
+    except Exception as e:
+        logger.error(f"[{user_name}] Login failed with exception: {e}")
+        token = None
+
+    if token is None:
+        logger.error(f"[{user_name}] Login failed. Skipping all bookings for this user.")
+        return [(idx, False) for idx, _ in due]
+
+    # Process each due booking
+    results = []
+    for idx, booking in due:
+        try:
+            success = process_booking(user_name, idx, booking, token, config)
+            results.append((idx, success))
+        except KeyboardInterrupt:
+            raise
+
+    return results
+
+
 def main():
-    """Main entry point — runs daily, processes only today's due bookings."""
+    """Main entry point — runs daily, processes only today's due bookings for all users."""
     # Load configuration (initializes logging)
     try:
         config = usc.loadConfig()
@@ -164,48 +220,38 @@ def main():
     today_weekday = datetime.today().weekday()
     logger.info(f"Today is {DAY_NAMES[today_weekday]}")
 
-    bookings = config.get('bookings', [])
-    if not bookings:
-        logger.error("No booking jobs configured.")
+    users = config.get('users', [])
+    if not users:
+        logger.error("No users configured.")
         return 1
 
-    # Filter to bookings that open today
-    due = [
-        (i, b) for i, b in enumerate(bookings, 1)
-        if booking_open_day(b['targetDay']) == today_weekday
-    ]
+    logger.info(f"Processing {len(users)} user(s)")
 
-    if not due:
-        logger.info("No bookings due today. Nothing to do.")
-        for i, b in enumerate(bookings, 1):
-            open_day = DAY_NAMES[booking_open_day(b['targetDay'])]
-            logger.info(f"  Booking {i} ({DAY_NAMES[b['targetDay']]} class) opens on {open_day}")
-        return 0
-
-    logger.info(f"{len(due)} booking(s) due today:")
-    for idx, b in due:
-        logger.info(f"  Booking {idx}: {DAY_NAMES[b['targetDay']]} class at location {b['locationId']}")
-
-    results = []
-    for idx, booking in due:
+    # Process each user in order (User 1 = highest priority)
+    all_results = {}  # user_name -> [(booking_idx, success)]
+    for user_index, user in enumerate(users, 1):
         try:
-            success = process_booking(idx, booking, config)
-            results.append((idx, success))
+            results = process_user(user_index, user, config)
+            all_results[user['name']] = results
         except KeyboardInterrupt:
             logger.info("\n" + "="*60)
             logger.info("Interrupted by user. Exiting...")
             logger.info("="*60)
             return 130
 
-    # Summary
+    # Summary grouped by user
     logger.info("="*60)
     logger.info("RESULTS SUMMARY")
     any_success = False
-    for idx, success in results:
-        status = "BOOKED" if success else "FAILED"
-        logger.info(f"  Booking {idx}: {status}")
-        if success:
-            any_success = True
+    for user_name, results in all_results.items():
+        if not results:
+            logger.info(f"  [{user_name}] No bookings due today")
+            continue
+        for idx, success in results:
+            status = "BOOKED" if success else "FAILED"
+            logger.info(f"  [{user_name}] Booking {idx}: {status}")
+            if success:
+                any_success = True
     logger.info("="*60)
 
     return 0 if any_success else 1

@@ -132,14 +132,68 @@ def loadConfigLegacy(config_name='usc_api.config'):
     }
 
 
+def _parse_bookings(prefix, primary_location_id, primary_target_day,
+                     primary_class_filter, primary_instructor_filter,
+                     primary_time_start, primary_time_end):
+    """
+    Parse bookings for a user from environment variables.
+
+    The first booking comes from the primary_* parameters.
+    Additional bookings are parsed from {prefix}BOOKING_N_* env vars (N=2,3,...).
+
+    Args:
+        prefix: Env var prefix, e.g. 'USC_' for User 1 or 'USC_USER_2_' for User 2
+        primary_location_id: Location ID for the first booking
+        primary_target_day: Target day for the first booking
+        primary_class_filter: Class title filter for the first booking
+        primary_instructor_filter: Instructor filter for the first booking
+        primary_time_start: Time range start for the first booking
+        primary_time_end: Time range end for the first booking
+
+    Returns:
+        list: List of booking dicts
+    """
+    booking1 = {
+        'locationId': int(primary_location_id),
+        'targetDay': int(primary_target_day),
+        'classTitleFilter': primary_class_filter,
+        'instructorFilter': primary_instructor_filter,
+        'timeRangeStart': primary_time_start,
+        'timeRangeEnd': primary_time_end,
+    }
+    bookings = [booking1]
+
+    n = 2
+    while True:
+        booking_prefix = f'{prefix}BOOKING_{n}_'
+        loc_id = os.getenv(f'{booking_prefix}LOCATION_ID')
+        if loc_id is None:
+            break
+        bookings.append({
+            'locationId': int(loc_id),
+            'targetDay': int(os.getenv(f'{booking_prefix}TARGET_DAY', '0')),
+            'classTitleFilter': os.getenv(f'{booking_prefix}CLASS_TITLE_FILTER', '').strip(),
+            'instructorFilter': os.getenv(f'{booking_prefix}INSTRUCTOR_FILTER', '').strip(),
+            'timeRangeStart': os.getenv(f'{booking_prefix}TIME_RANGE_START', '').strip(),
+            'timeRangeEnd': os.getenv(f'{booking_prefix}TIME_RANGE_END', '').strip(),
+        })
+        n += 1
+
+    return bookings
+
+
 def loadConfig():
     """
     Load configuration from environment variables.
     Falls back to .env file if environment variables not set.
     Falls back to legacy usc_api.config if .env doesn't exist.
 
+    Supports multiple users:
+    - User 1: existing USC_EMAIL, USC_PASSWORD, USC_LOCATION_ID, etc.
+    - User N (N=2,3,...): USC_USER_N_EMAIL, USC_USER_N_PASSWORD, etc.
+
     Returns:
-        dict: Configuration dictionary with all required settings
+        dict: Configuration dictionary with shared settings and 'users' list
 
     Raises:
         SystemExit: If required environment variables are missing
@@ -154,9 +208,16 @@ def loadConfig():
         log_level = os.getenv('USC_LOG_LEVEL', 'INFO')
         log_file = os.getenv('USC_LOG_FILE', '')
         setup_logging(log_level, log_file if log_file else None)
+        # Wrap legacy config into multi-user format
+        config['users'] = [{
+            'name': 'User 1',
+            'email': config['email'],
+            'password': config['password'],
+            'bookings': config.get('bookings', []),
+        }]
         return config
 
-    # Required variables
+    # Required variables for User 1
     required_vars = ['USC_EMAIL', 'USC_PASSWORD', 'USC_LOCATION_ID']
     missing = [var for var in required_vars if not os.getenv(var)]
 
@@ -174,10 +235,8 @@ def loadConfig():
     log_file = os.getenv('USC_LOG_FILE', '')
     setup_logging(log_level, log_file if log_file else None)
 
-    # Build configuration dictionary
+    # Build shared configuration dictionary
     config = {
-        'email': os.getenv('USC_EMAIL'),
-        'password': os.getenv('USC_PASSWORD'),
         'clientId': os.getenv('USC_CLIENT_ID', '86093282310'),
         'clientSecret': os.getenv('USC_CLIENT_SECRET',
                                  '1BJX3V5HWUYVCZ77S1TY9L1PSWAXA3K95ZMUC3ZRBAP3M696ZF4SD3QW5VBNU81H'),
@@ -189,58 +248,84 @@ def loadConfig():
                                    'USCAPP/4.0.8 (android; 28; Scale/2.75)'),
             'accept-language': os.getenv('USC_ACCEPT_LANGUAGE', 'en-US;q=1.0'),
         },
-        # Booking settings
-        'locationId': int(os.getenv('USC_LOCATION_ID')),
         'advanceDays': int(os.getenv('USC_ADVANCE_DAYS', '14')),
         'pollInterval': int(os.getenv('USC_POLL_INTERVAL', '1800')),
         'maxPollHours': int(os.getenv('USC_MAX_POLL_HOURS', '5')),
-        # Filters (Phase 4)
-        'classTitleFilter': os.getenv('USC_CLASS_TITLE_FILTER', '').strip(),
-        'instructorFilter': os.getenv('USC_INSTRUCTOR_FILTER', '').strip(),
-        'timeRangeStart': os.getenv('USC_TIME_RANGE_START', '').strip(),
-        'timeRangeEnd': os.getenv('USC_TIME_RANGE_END', '').strip(),
     }
 
-    # Build bookings list — Booking 1 from primary env vars
-    booking1 = {
-        'locationId': config['locationId'],
-        'targetDay': int(os.getenv('USC_TARGET_DAY', '0')),
-        'classTitleFilter': config['classTitleFilter'],
-        'instructorFilter': config['instructorFilter'],
-        'timeRangeStart': config['timeRangeStart'],
-        'timeRangeEnd': config['timeRangeEnd'],
-    }
-    bookings = [booking1]
+    # --- Build users list ---
+    users = []
 
-    # Parse additional bookings from USC_BOOKING_N_* env vars (N=2,3,...)
+    # User 1: from existing USC_* env vars
+    user1_bookings = _parse_bookings(
+        prefix='USC_',
+        primary_location_id=os.getenv('USC_LOCATION_ID'),
+        primary_target_day=os.getenv('USC_TARGET_DAY', '0'),
+        primary_class_filter=os.getenv('USC_CLASS_TITLE_FILTER', '').strip(),
+        primary_instructor_filter=os.getenv('USC_INSTRUCTOR_FILTER', '').strip(),
+        primary_time_start=os.getenv('USC_TIME_RANGE_START', '').strip(),
+        primary_time_end=os.getenv('USC_TIME_RANGE_END', '').strip(),
+    )
+    users.append({
+        'name': os.getenv('USC_USER_1_NAME', 'User 1'),
+        'email': os.getenv('USC_EMAIL'),
+        'password': os.getenv('USC_PASSWORD'),
+        'bookings': user1_bookings,
+    })
+
+    # User N (N=2,3,...): from USC_USER_N_* env vars
     n = 2
     while True:
-        prefix = f'USC_BOOKING_{n}_'
-        loc_id = os.getenv(f'{prefix}LOCATION_ID')
-        if loc_id is None:
+        user_prefix = f'USC_USER_{n}_'
+        email = os.getenv(f'{user_prefix}EMAIL')
+        if email is None:
             break
-        bookings.append({
-            'locationId': int(loc_id),
-            'targetDay': int(os.getenv(f'{prefix}TARGET_DAY', '0')),
-            'classTitleFilter': os.getenv(f'{prefix}CLASS_TITLE_FILTER', '').strip(),
-            'instructorFilter': os.getenv(f'{prefix}INSTRUCTOR_FILTER', '').strip(),
-            'timeRangeStart': os.getenv(f'{prefix}TIME_RANGE_START', '').strip(),
-            'timeRangeEnd': os.getenv(f'{prefix}TIME_RANGE_END', '').strip(),
+
+        password = os.getenv(f'{user_prefix}PASSWORD')
+        if password is None:
+            logger.error(f"USC_USER_{n}_EMAIL is set but USC_USER_{n}_PASSWORD is missing. Skipping user {n}.")
+            n += 1
+            continue
+
+        location_id = os.getenv(f'{user_prefix}LOCATION_ID')
+        if location_id is None:
+            logger.error(f"USC_USER_{n}_EMAIL is set but USC_USER_{n}_LOCATION_ID is missing. Skipping user {n}.")
+            n += 1
+            continue
+
+        user_bookings = _parse_bookings(
+            prefix=user_prefix,
+            primary_location_id=location_id,
+            primary_target_day=os.getenv(f'{user_prefix}TARGET_DAY', '0'),
+            primary_class_filter=os.getenv(f'{user_prefix}CLASS_TITLE_FILTER', '').strip(),
+            primary_instructor_filter=os.getenv(f'{user_prefix}INSTRUCTOR_FILTER', '').strip(),
+            primary_time_start=os.getenv(f'{user_prefix}TIME_RANGE_START', '').strip(),
+            primary_time_end=os.getenv(f'{user_prefix}TIME_RANGE_END', '').strip(),
+        )
+
+        users.append({
+            'name': os.getenv(f'{user_prefix}NAME', f'User {n}'),
+            'email': email,
+            'password': password,
+            'bookings': user_bookings,
         })
         n += 1
 
-    config['bookings'] = bookings
+    config['users'] = users
 
     logger.info("Configuration loaded successfully")
     logger.debug(f"API Base URL: {config['baseURL']}")
-    logger.info(f"Configured {len(bookings)} booking job(s)")
-    for i, b in enumerate(bookings, 1):
-        day_names = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
-        logger.debug(
-            f"  Booking {i}: location={b['locationId']}, "
-            f"day={day_names[b['targetDay']]}, "
-            f"filter='{b['classTitleFilter']}'"
-        )
+    logger.info(f"Configured {len(users)} user(s)")
+
+    day_names = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+    for user in users:
+        logger.info(f"  {user['name']}: {len(user['bookings'])} booking(s)")
+        for i, b in enumerate(user['bookings'], 1):
+            logger.debug(
+                f"    Booking {i}: location={b['locationId']}, "
+                f"day={day_names[b['targetDay']]}, "
+                f"filter='{b['classTitleFilter']}'"
+            )
 
     return config
 
@@ -250,12 +335,15 @@ def loadConfig():
 # ============================================================
 
 @retry_on_failure(max_retries=3)
-def login(config: Dict[str, Any]) -> Optional[str]:
+def login(config: Dict[str, Any], email: Optional[str] = None,
+          password: Optional[str] = None) -> Optional[str]:
     """
     Login with OAuth2 password grant.
 
     Args:
-        config: Configuration dictionary
+        config: Configuration dictionary (shared settings)
+        email: User email (if None, falls back to config['email'] for legacy compat)
+        password: User password (if None, falls back to config['password'])
 
     Returns:
         Bearer token if successful, None otherwise
@@ -263,17 +351,20 @@ def login(config: Dict[str, Any]) -> Optional[str]:
     Raises:
         requests.exceptions.RequestException: On network errors after retries
     """
+    login_email = email or config.get('email')
+    login_password = password or config.get('password')
+
     request_url = config['baseURL'] + '/auth/token'
 
     data = {
-        'username': config['email'],
-        'password': config['password'],
+        'username': login_email,
+        'password': login_password,
         'client_secret': config['clientSecret'],
         'client_id': config['clientId'],
         'grant_type': 'password'
     }
 
-    logger.info(f"Logging in as {config['email']}")
+    logger.info(f"Logging in as {login_email}")
     logger.debug(f"POST: {request_url}")
 
     try:
