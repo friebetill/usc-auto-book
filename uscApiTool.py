@@ -98,8 +98,10 @@ def process_booking(user_name, booking_index, booking, token, config):
     # Polling loop with max duration
     class_id = None
     poll_interval = config['pollInterval']
+    fast_poll_interval = 60  # 1 minute during first hour
     max_poll_hours = config.get('maxPollHours', 5)
     deadline = datetime.now() + timedelta(hours=max_poll_hours)
+    poll_start = datetime.now()
     attempt = 0
 
     logger.info(f"{log_prefix} Polling for up to {max_poll_hours}h (until {deadline.strftime('%H:%M:%S')})")
@@ -118,15 +120,19 @@ def process_booking(user_name, booking_index, booking, token, config):
                 logger.info(f"{log_prefix} Found class! Class ID: {class_id}")
                 break
 
-            logger.info(f"{log_prefix} No matching classes. Waiting {poll_interval}s...")
-            time.sleep(poll_interval)
+            elapsed = (datetime.now() - poll_start).total_seconds()
+            current_interval = fast_poll_interval if elapsed < 3600 else poll_interval
+            logger.info(f"{log_prefix} No matching classes. Waiting {current_interval}s...")
+            time.sleep(current_interval)
 
         except KeyboardInterrupt:
             raise
         except Exception as e:
             logger.error(f"{log_prefix} Error during class search: {e}", exc_info=True)
-            logger.info(f"{log_prefix} Retrying in {poll_interval}s...")
-            time.sleep(poll_interval)
+            elapsed = (datetime.now() - poll_start).total_seconds()
+            current_interval = fast_poll_interval if elapsed < 3600 else poll_interval
+            logger.info(f"{log_prefix} Retrying in {current_interval}s...")
+            time.sleep(current_interval)
 
     if class_id is None:
         logger.warning(f"{log_prefix} No class found within {max_poll_hours}h.")
