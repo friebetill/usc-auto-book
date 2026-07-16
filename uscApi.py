@@ -241,7 +241,7 @@ def loadConfig():
         'clientSecret': os.getenv('USC_CLIENT_SECRET',
                                  '1BJX3V5HWUYVCZ77S1TY9L1PSWAXA3K95ZMUC3ZRBAP3M696ZF4SD3QW5VBNU81H'),
         'baseURL': os.getenv('USC_API_BASE_URL',
-                            'https://api.urbansportsclub.com/api/v5'),
+                            'https://api.urbansportsclub.com/api/v6'),
         'headers': {
             'accept-encoding': os.getenv('USC_ACCEPT_ENCODING', 'gzip, deflate'),
             'user-agent': os.getenv('USC_USER_AGENT',

@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 from pprint import pprint
 
 # Test configuration (will be replaced with env vars in Phase 2)
-BASE_URL = "https://api.urbansportsclub.com/api/v5"
+BASE_URL = "https://api.urbansportsclub.com/api/v6"
 HEADERS = {
     'accept-encoding': 'gzip, deflate',
     'user-agent': 'USCAPP/4.0.8 (android; 28; Scale/2.75)',
